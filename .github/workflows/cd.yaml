@@ -1,0 +1,43 @@
+on: 
+  workflow_call:
+
+name: CD
+
+jobs:
+  CD:
+    name: CD
+    runs-on: ubuntu-latest
+    steps:
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ inputs.aws_ci_region }}    
+    
+    # The name is static here but should be dynamic for each env and region
+    # Kube config is updated so we can connect to the cluster with our credentials via Helm
+    - name: Update kube-config
+      run: aws eks --region us-east-1 update-kubeconfig --name eks-test2-us-east-1
+
+    - name: Replace branch name chars
+      id: branch_name
+      run: |
+        name=$( echo '${{ github.ref_name }}' | tr '/' '-' )
+        echo "branch_name=$name" >> $GITHUB_OUTPUT
+
+    # This action downloads AND unzips the artifact
+    - name: Download Helm artifact
+      uses: actions/download-artifact@v3
+      with:
+        name: ${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}.zip
+        path: helm
+
+    - name: Deploy/update Environemnt
+      run: |
+        helm upgrade test2 ./helm/global/ \
+        --install \
+        --namespace test2 \
+        --dependency-update \
+        --create-namespace \
+        -f helm/global/test2_values.yaml

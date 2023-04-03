@@ -1,0 +1,91 @@
+on: 
+  workflow_call:
+    inputs:
+      ecr_registry:
+        type: string
+        default: "11111111111.dkr.ecr.us-east-1.amazonaws.com"
+      aws_ci_region:
+        type: string
+        default: "us-east-1"
+      service_name:
+        type: string
+        required: true
+      dockerfile_path:
+        required: true
+        type: string
+      context_path:
+        required: true
+        type: string
+
+name: CI
+
+jobs:
+  CI:
+    name: CI
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ inputs.aws_ci_region }}    
+
+    - name: Login to ECR
+      uses: docker/login-action@v2.0.0
+      with:
+        registry: ${{ inputs.ecr_registry }}/${{ inputs.service_name }}
+        username: ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
+        password: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
+        ecr: true
+        logout: true
+
+    # Replace forward slash char for the docker tag.("/" not allowed in tags)
+    - name: Replace branch name chars
+      id: branch_name
+      run: |
+        name=$( echo '${{ github.ref_name }}' | tr '/' '-' )
+        echo "branch_name=$name" >> $GITHUB_OUTPUT
+
+    - name: Docker build
+      uses: docker/build-push-action@v4
+      with:
+        file: ${{ inputs.dockerfile_path }}
+        context: ${{ inputs.context_path }}
+        tags: ${{ inputs.ecr_registry }}/${{ inputs.service_name }}:${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}
+
+    # Test GET /posts before pushing to ECR (Image will be built from cache)
+    - name: Test image
+      run: |
+        set -e
+        docker run -p 8000:8000 --name=go-app-health -d \
+        ${{ inputs.ecr_registry }}/${{ inputs.service_name }}:${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}
+
+        until [ "`docker inspect go-app-health -f {{.State.Running}}`" == "true" ]; do
+            sleep 5; 
+            echo "container not running yet"
+        done;
+
+        echo "container ready"
+        curl --fail-with-body localhost:8000/posts
+
+    # Build image from cache and push to ECR
+    - name: Docker build and push
+      uses: docker/build-push-action@v4
+      with:
+        file: ${{ inputs.dockerfile_path }}
+        context: ${{ inputs.context_path }}
+        tags: ${{ inputs.ecr_registry }}/${{ inputs.service_name }}:${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}
+        push: true
+
+    - name: Prepare Helm chart artifact
+      run: |
+        sed -i "s,tag:.*,tag:\ ${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}," helm/services/go/values.yaml
+
+    - name: Publish Helm chart artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ steps.branch_name.outputs.branch_name }}-${{ github.sha }}.zip
+        path: helm
