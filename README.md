@@ -1,1 +1,0 @@
-# y2_devosp_test_templates
