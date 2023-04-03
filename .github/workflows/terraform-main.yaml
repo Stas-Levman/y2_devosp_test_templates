@@ -1,0 +1,54 @@
+on:
+  workflow_call:
+    inputs:
+      env:
+        required: true
+        type: string
+      region:
+        required: true
+        type: string
+      terraform-action:
+        required: true
+        type: string
+      working-directory:
+        required: true
+        type: string
+
+name: "Terraform main"
+
+jobs:
+  Terraform-main:
+    runs-on: ubuntu-latest
+    name: Terraform main
+    steps:
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v1-node16
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: HashiCorp - Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+
+      # Initialize a new or existing Terraform working directory by creating initial files, loading any remote state, downloading modules, etc.
+    - name: Terraform Init
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform init
+
+    # Select Terraform workspace OR create and select new workspace if not present
+    - name: Terraform select workspace
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        (terraform workspace select ${{ inputs.env }} || terraform workspace new ${{ inputs.env }})
+
+    # Terraform action with environment .tfvars file
+    - name: Terraform apply
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform ${{ inputs.terraform-action }} -var-file="/../environments/${{ inputs.env }}.tfvars" \
+        --auto-approve \
+        -input=false
